@@ -174,6 +174,14 @@ public:
 		decoder->get_info(0, p_info, p_abort);
 	}
 
+	bool get_dynamic_info(file_info & p_out, double & p_timestamp_delta) {
+		return decoder->get_dynamic_info(p_out,p_timestamp_delta);
+	}
+
+	bool get_dynamic_info_track(file_info & p_out, double & p_timestamp_delta) {
+		return decoder->get_dynamic_info_track(p_out,p_timestamp_delta);
+	}
+
 	bool run(audio_chunk &p_chunk, abort_callback &p_abort) {
 		if(first_packet) {
 			decoder->initialize(0, 4, p_abort);
@@ -376,6 +384,7 @@ public:
 				open_raw(p_subsong, p_abort);
 				raw.get_info(p_info, p_abort);
 			}
+
 		}
 
 		p_info.meta_set("ALBUM", bgmlist[0]["album"].c_str());
@@ -457,10 +466,26 @@ public:
 	}
 
 	bool decode_can_seek() {return true;}
-	bool decode_get_dynamic_info_track(file_info &p_out,
-			double &p_timestamp_delta) {return false;}
-	bool decode_get_dynamic_info(file_info &p_info,
-			double &p_timestamp_delta) {return false;}
+//	bool decode_get_dynamic_info_track(file_info &p_out,
+//			double &p_timestamp_delta) {return false;}
+//	bool decode_get_dynamic_info(file_info &p_info,
+//			double &p_timestamp_delta) {return false;}
+	bool decode_get_dynamic_info(file_info &p_out, double &p_timestamp_delta) {
+		if(!isWave && read_thbgm_info) {
+			return raw.get_dynamic_info(p_out,p_timestamp_delta);
+		}
+		else
+			return false;
+	}
+
+	bool decode_get_dynamic_info_track(file_info &p_out, double &p_timestamp_delta) {
+		if(!isWave && read_thbgm_info) {
+			return raw.get_dynamic_info_track(p_out,p_timestamp_delta);
+		}
+		else
+			return false;
+	}
+
 	void decode_on_idle(abort_callback &p_abort) {}
 	void retag_set_info(t_uint32 p_subsong, const file_info &p_info,
 			abort_callback &p_abort) {}
