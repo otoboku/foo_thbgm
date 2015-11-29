@@ -133,7 +133,7 @@ private:
 	bool first_packet;
 	t_filesize current_sample;
 	t_filesize read_count;
-	double seek_seconds;
+	//double seek_seconds;
 	t_uint32 current_loop;
 public:
 	bool isWave;
@@ -168,7 +168,8 @@ public:
 		if(isWave) {
 			m_buffer.set_size(samples_to_length(deltaread, samplewidth));
 		}
-		//decoder->initialize(0, input_flag_playback, p_abort);
+		else
+			decoder->initialize(0, input_flag_playback, p_abort);
 		current_loop = 1;
 	}
 
@@ -200,14 +201,7 @@ public:
 			return false;
 	}
 
-	bool run(audio_chunk &p_chunk, abort_callback &p_abort) {
-		if(first_packet) {
-			decoder->initialize(0, input_flag_playback, p_abort);
-			double time_offset = audio_math::samples_to_time(m_offset, samplerate);
-			decoder->seek(seek_seconds + time_offset, p_abort);
-			first_packet = false;
-		}
-		
+	bool run(audio_chunk &p_chunk, abort_callback &p_abort) {		
 		bool result = decoder->run(p_chunk, p_abort);
 		read_count = p_chunk.get_sample_count();
 		current_sample += read_count;
@@ -229,12 +223,6 @@ public:
 			}
 		}
 		return result;
-	}
-
-	void seek(double seconds) {
-		current_sample = audio_math::time_to_samples(seconds, samplerate);
-		seek_seconds = seconds;
-		first_packet = true;
 	}
 
 	bool decode_run(audio_chunk &p_chunk, abort_callback &p_abort) {
@@ -270,6 +258,11 @@ public:
 		}
 	}
 
+	void seek(double p_seconds, abort_callback &p_abort) {
+		current_sample = audio_math::time_to_samples(p_seconds, samplerate);
+		decoder->seek(p_seconds + audio_math::samples_to_time(m_offset, samplerate), p_abort);
+	}
+
 	void decode_seek(double p_seconds, abort_callback &p_abort) {
 		if(isWave) {
 			t_uint64 samples = audio_math::time_to_samples(p_seconds, samplerate);
@@ -279,7 +272,7 @@ public:
 				m_filepos = m_maxseeksize;
 			raw_seek(m_offset + m_filepos, p_abort);
 		} else {
-			seek(p_seconds);
+			seek(p_seconds, p_abort);
 		}
 	}
 };
@@ -343,7 +336,7 @@ protected:
 		raw.m_headlen = m_headlen;
 		raw.m_looplen = m_looplen;
 		raw.m_totallen = m_totallen;
-		raw.init(p_abort);
+		//raw.init(p_abort);
 
 		raw.open(real_path.c_str(), input_open_decode, isWave, p_abort);
 	}
@@ -538,7 +531,8 @@ public:
 		channels = atoi(bgmlist[p_subsong]["channels"].c_str());
 		samplewidth = bits * channels / 8;
 
-		open_raw(get_subsong(--p_subsong), p_abort);
+		open_raw(p_subsong, p_abort);
+		raw.init(p_abort);
 		decode_seek(0, p_abort);
 	}
 
@@ -578,7 +572,7 @@ public:
 static mainmenu_commands_factory_t<mainmenu_loopsetting> loopsetting_factory;
 static input_factory_t<input_thxml> g_input_thbgm_factory;
 DECLARE_FILE_TYPE("Touhou-like BGM XML-Tag File", "*.thxml");
-DECLARE_COMPONENT_VERSION("ThBGM Player", "1.1.120527.18.moe", 
+DECLARE_COMPONENT_VERSION("ThBGM Player", "1.1.120527.19.moe", 
 "Play BGM files of Touhou and some related doujin games.\n\n"
 "If you have any feature request and bug report,\n"
 "feel free to contact me at my E-mail address below.\n\n"
