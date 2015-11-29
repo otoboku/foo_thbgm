@@ -131,10 +131,12 @@ private:
 	input_decoder::ptr decoder;
 	bool first_packet;
 	t_filesize current_sample;
-	//double seek_seconds;
-	t_uint32 current_loop;
+	double seek_seconds;
+
 
 public:
+	t_uint32 current_loop;
+
 	bool isWave;
 
 	t_uint32 bits;
@@ -175,7 +177,7 @@ public:
 		if(isWave) {
 			m_buffer.set_size(samples_to_length(deltaread));
 		}
-		decoder->initialize(0, input_flag_playback, p_abort);
+		//decoder->initialize(0, input_flag_playback, p_abort);
 		current_loop = 1;
 	}
 
@@ -200,7 +202,12 @@ public:
 	}
 
 	bool run(audio_chunk &p_chunk, abort_callback &p_abort) {
-		//if(first_packet)
+		if(first_packet) {
+			decoder->initialize(0, input_flag_playback, p_abort);
+			double time_offset = audio_math::samples_to_time(m_offset, samplerate);
+			decoder->seek(seek_seconds + time_offset, p_abort);
+			first_packet = false;
+		}
 		
 		bool result = decoder->run(p_chunk, p_abort);
 		if(!needloop) {
@@ -253,8 +260,8 @@ public:
 
 	void seek(double p_seconds, abort_callback &p_abort) {
 		current_sample = audio_math::time_to_samples(p_seconds, samplerate);
-		//seek_seconds = seconds;
-		//first_packet = true;
+		seek_seconds = p_seconds;
+		first_packet = true;
 		double time_offset = audio_math::samples_to_time(m_offset, samplerate);
 		decoder->seek(p_seconds + time_offset, p_abort);
 	}
@@ -292,7 +299,7 @@ protected:
 	
 	bool isWave;
 	bool isArchive;
-	input_raw raw;
+	input_raw * raw;
 
 	inline t_uint64 length_to_samples(t_filesize p_length) {
 		return p_length / samplewidth;
@@ -319,8 +326,23 @@ protected:
 			real_path = basepath;
 		}
 		real_path.append(bgm_path);
-		raw = service_impl_t<input_raw>();
-		raw.open(real_path.c_str(), input_open_decode, isWave, p_abort);
+		input_raw * ptr = new service_impl_t<input_raw>();
+		//raw = service_impl_t<input_raw>();
+		
+ptr->isWave = isWave;
+
+ptr->bits = bits;
+ptr->channels = channels;
+ptr->samplewidth = samplewidth;
+
+ptr->samplerate = samplerate;
+ptr->m_offset = m_offset;
+ptr->m_headlen = m_headlen;
+ptr->m_looplen = m_looplen;
+ptr->m_totallen = m_totallen;
+ptr->init(p_abort);
+		ptr->open(real_path.c_str(), input_open_decode, isWave, p_abort);
+		raw = ptr;
 	}
 
 /*	// get_info 用，使用open_raw 会因为current_sample定义在类内无法播放
@@ -515,73 +537,26 @@ public:
 												abort_callback &p_abort) {
 		open_raw(get_subsong(--p_subsong), p_abort);
 
-		bool isWave;
-		pfc::string8 title;
-		pfc::string8 artist;
-		t_uint32 bits;
-		t_uint32 channels;
-		t_uint32 samplewidth;
-		pfc::string8 encoding;
-		pfc::string8 codec;
-		pfc::string8 totaltracks;
 
-		t_uint32 samplerate;
-		t_filesize m_offset;
-		t_filesize m_headlen;
-		t_filesize m_looplen;
-		t_filesize m_totallen;
-
-		isWave = bgmlist[p_subsong]["codec"] == "PCM" && !isArchive;
-		codec = bgmlist[p_subsong]["codec"].c_str();
-		encoding = bgmlist[p_subsong]["encoding"].c_str();
-		title = bgmlist[p_subsong]["title"].c_str();
-		artist = bgmlist[p_subsong]["artist"].c_str();
-
-		string pos = bgmlist[p_subsong]["pos"];
-		size_t pos_head = pos.find(',');
-		size_t head_loop = pos.rfind(',');
-		m_offset = _atoi64(pos.substr(0, pos_head).c_str());
-		m_headlen = _atoi64(pos.substr(++pos_head, head_loop).c_str());
-		m_looplen = _atoi64(pos.substr(++head_loop).c_str());
-		m_totallen = m_headlen + m_looplen;
-
-		samplerate = atoi(bgmlist[p_subsong]["samplerate"].c_str());
-		bits = atoi(bgmlist[p_subsong]["bits"].c_str());
-		channels = atoi(bgmlist[p_subsong]["channels"].c_str());
-		samplewidth = bits * channels / 8;
-
-		totaltracks = pfc::format_int(bgmlist.size() - 1);
-
-raw.isWave = isWave;
-
-raw.bits = bits;
-raw.channels = channels;
-raw.samplewidth = samplewidth;
-
-raw.samplerate = samplerate;
-raw.m_offset = m_offset;
-raw.m_headlen = m_headlen;
-raw.m_looplen = m_looplen;
-raw.m_totallen = m_totallen;
 
 		//current_loop = 1;
-		raw.init(p_abort);
+
 		decode_seek(0, p_abort);
 	}
 
 	bool decode_run(audio_chunk &p_chunk, abort_callback &p_abort) {
 		if(isWave) {
-			return raw.run_wav(p_chunk, p_abort);
+			return raw->run_wav(p_chunk, p_abort);
 		} else {
-			return raw.run(p_chunk, p_abort);
+			return raw->run(p_chunk, p_abort);
 		}
 	}
 
 	void decode_seek(double p_seconds, abort_callback &p_abort) {
 		if(isWave) {
-			raw.seek_wav(p_seconds, p_abort);
+			raw->seek_wav(p_seconds, p_abort);
 		} else {
-			raw.seek(p_seconds, p_abort);
+			raw->seek(p_seconds, p_abort);
 		}
 	}
 
@@ -593,7 +568,7 @@ raw.m_totallen = m_totallen;
 	bool decode_get_dynamic_info(file_info &p_out, double &p_timestamp_delta) {
 		//if(!isWave && read_thbgm_info) {
 		if(!isWave) {
-			return raw.get_dynamic_info(p_out,p_timestamp_delta);
+			return raw->get_dynamic_info(p_out,p_timestamp_delta);
 		}
 		else
 			return false;
@@ -601,7 +576,7 @@ raw.m_totallen = m_totallen;
 
 	bool decode_get_dynamic_info_track(file_info &p_out, double &p_timestamp_delta) {
 		if(!isWave) {
-			return raw.get_dynamic_info_track(p_out,p_timestamp_delta);
+			return raw->get_dynamic_info_track(p_out,p_timestamp_delta);
 		}
 		else
 			return false;
