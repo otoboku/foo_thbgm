@@ -16,16 +16,17 @@ static cfg_bool loopforever(cfg_loop_forever, true);
 static cfg_uint loopcount(cfg_loop_count, 1);
 static cfg_bool read_thbgm_info(cfg_thbgm_readinfo, false);
 
+
 const t_uint32 deltaread = 1024;
 //double seek_seconds;
-t_uint32 samplerate;
-string pack;
-t_filesize m_offset;
-t_filesize m_headlen;
-t_filesize m_looplen;
-t_filesize m_totallen;
+//t_uint32 samplerate;
+//string pack;
+//t_filesize m_offset;
+//t_filesize m_headlen;
+//t_filesize m_looplen;
+//t_filesize m_totallen;
 //t_filesize current_sample;
-t_uint32 current_loop;
+//t_uint32 current_loop;
 
 
 class mainmenu_loopsetting : public mainmenu_commands {
@@ -130,8 +131,34 @@ private:
 	input_decoder::ptr decoder;
 	bool first_packet;
 	t_filesize current_sample;
-	double seek_seconds;
+	//double seek_seconds;
+	t_uint32 current_loop;
+
 public:
+	bool isWave;
+
+	t_uint32 bits;
+	t_uint32 channels;
+	t_uint32 samplewidth;
+
+	t_uint32 samplerate;
+	t_filesize m_offset;
+	t_filesize m_headlen;
+	t_filesize m_looplen;
+	t_filesize m_totallen;
+
+	t_filesize m_filepos;
+	t_filesize m_maxseeksize;
+	pfc::array_t<t_uint8> m_buffer;
+
+	inline t_uint64 length_to_samples(t_filesize p_length) {
+		return p_length / samplewidth;
+	}
+
+	inline t_filesize samples_to_length(t_uint64 p_samples) {
+		return p_samples * samplewidth;
+	}
+
 	void open(const char *p_path, t_input_open_reason p_reason,
 						bool isWave, abort_callback &p_abort) {
 		m_file.release();
@@ -141,6 +168,15 @@ public:
 			decoder.release();
 			input_entry::g_open_for_decoding(decoder, m_file, p_path, p_abort);
 		}
+	}
+
+	void init(abort_callback &p_abort)
+	{
+		if(isWave) {
+			m_buffer.set_size(samples_to_length(deltaread));
+		}
+		decoder->initialize(0, input_flag_playback, p_abort);
+		current_loop = 1;
 	}
 
 	t_size read(void *buffer, t_size size, abort_callback &p_abort) {
@@ -164,12 +200,7 @@ public:
 	}
 
 	bool run(audio_chunk &p_chunk, abort_callback &p_abort) {
-		if(first_packet) {
-			decoder->initialize(0, input_flag_playback, p_abort);
-			double time_offset = audio_math::samples_to_time(m_offset, samplerate);
-			decoder->seek(seek_seconds + time_offset, p_abort);
-			first_packet = false;
-		}
+		//if(first_packet)
 		
 		bool result = decoder->run(p_chunk, p_abort);
 		if(!needloop) {
@@ -191,10 +222,50 @@ public:
 		}
 	}
 
-	void seek(double seconds) {
-		current_sample = audio_math::time_to_samples(seconds, samplerate);
-		seek_seconds = seconds;
-		first_packet = true;
+	bool run_wav(audio_chunk &p_chunk, abort_callback &p_abort) {
+			if(m_filepos >= m_maxseeksize) return false; 
+			t_size deltaread_size = pfc::downcast_guarded<t_size>
+				(pfc::min_t(samples_to_length(deltaread), m_maxseeksize - m_filepos));
+			t_size deltaread_done = 
+				read(m_buffer.get_ptr(), deltaread_size, p_abort);
+			m_filepos += deltaread_done;
+		
+			if(needloop && m_filepos >= m_maxseeksize) {
+				//t_filesize remain = samples_to_length(deltaread) - deltaread_done;
+				//m_filepos = m_headlen + remain;
+				m_filepos = m_headlen;
+				raw_seek(m_offset + m_headlen, p_abort);
+				//deltaread_done += raw.read(m_buffer.get_ptr()
+				//	+ deltaread_done, remain, p_abort);
+				if(!loopforever) current_loop++;
+			}
+
+			p_chunk.set_data_fixedpoint(m_buffer.get_ptr(), deltaread_done,
+				samplerate, channels, bits,
+				audio_chunk::g_guess_channel_config(channels));
+
+			// return false时 最后一块不播放
+			//if(!needloop && m_filepos >= m_maxseeksize) {
+			//	return false;
+			//}
+			return true;
+	}
+
+	void seek(double p_seconds, abort_callback &p_abort) {
+		current_sample = audio_math::time_to_samples(p_seconds, samplerate);
+		//seek_seconds = seconds;
+		//first_packet = true;
+		double time_offset = audio_math::samples_to_time(m_offset, samplerate);
+		decoder->seek(p_seconds + time_offset, p_abort);
+	}
+
+	void seek_wav(double p_seconds, abort_callback &p_abort) {
+		t_uint64 samples = audio_math::time_to_samples(p_seconds, samplerate);
+		m_filepos = samples * samplewidth;
+		m_maxseeksize = m_headlen + m_looplen;
+		if(m_filepos > m_maxseeksize)
+			m_filepos = m_maxseeksize;
+		raw_seek(m_offset + m_filepos, p_abort);
 	}
 };
 
@@ -210,14 +281,18 @@ protected:
 	t_uint32 samplewidth;
 	pfc::string8 encoding;
 	pfc::string8 codec;
-	t_filesize m_filepos;
-	t_filesize m_maxseeksize;
 	pfc::string8 totaltracks;
+
+	t_uint32 samplerate;
+	string pack;
+	t_filesize m_offset;
+	t_filesize m_headlen;
+	t_filesize m_looplen;
+	t_filesize m_totallen;
 	
 	bool isWave;
 	bool isArchive;
 	input_raw raw;
-	pfc::array_t<t_uint8> m_buffer;
 
 	inline t_uint64 length_to_samples(t_filesize p_length) {
 		return p_length / samplewidth;
@@ -439,41 +514,64 @@ public:
 	void decode_initialize(t_uint32 p_subsong, unsigned p_flags,
 												abort_callback &p_abort) {
 		open_raw(get_subsong(--p_subsong), p_abort);
-		if(isWave) {
-			m_buffer.set_size(samples_to_length(deltaread));
-		}
-		current_loop = 1;
+
+		bool isWave;
+		pfc::string8 title;
+		pfc::string8 artist;
+		t_uint32 bits;
+		t_uint32 channels;
+		t_uint32 samplewidth;
+		pfc::string8 encoding;
+		pfc::string8 codec;
+		pfc::string8 totaltracks;
+
+		t_uint32 samplerate;
+		t_filesize m_offset;
+		t_filesize m_headlen;
+		t_filesize m_looplen;
+		t_filesize m_totallen;
+
+		isWave = bgmlist[p_subsong]["codec"] == "PCM" && !isArchive;
+		codec = bgmlist[p_subsong]["codec"].c_str();
+		encoding = bgmlist[p_subsong]["encoding"].c_str();
+		title = bgmlist[p_subsong]["title"].c_str();
+		artist = bgmlist[p_subsong]["artist"].c_str();
+
+		string pos = bgmlist[p_subsong]["pos"];
+		size_t pos_head = pos.find(',');
+		size_t head_loop = pos.rfind(',');
+		m_offset = _atoi64(pos.substr(0, pos_head).c_str());
+		m_headlen = _atoi64(pos.substr(++pos_head, head_loop).c_str());
+		m_looplen = _atoi64(pos.substr(++head_loop).c_str());
+		m_totallen = m_headlen + m_looplen;
+
+		samplerate = atoi(bgmlist[p_subsong]["samplerate"].c_str());
+		bits = atoi(bgmlist[p_subsong]["bits"].c_str());
+		channels = atoi(bgmlist[p_subsong]["channels"].c_str());
+		samplewidth = bits * channels / 8;
+
+		totaltracks = pfc::format_int(bgmlist.size() - 1);
+
+raw.isWave = isWave;
+
+raw.bits = bits;
+raw.channels = channels;
+raw.samplewidth = samplewidth;
+
+raw.samplerate = samplerate;
+raw.m_offset = m_offset;
+raw.m_headlen = m_headlen;
+raw.m_looplen = m_looplen;
+raw.m_totallen = m_totallen;
+
+		//current_loop = 1;
+		raw.init(p_abort);
 		decode_seek(0, p_abort);
 	}
 
 	bool decode_run(audio_chunk &p_chunk, abort_callback &p_abort) {
 		if(isWave) {
-			if(m_filepos >= m_maxseeksize) return false; 
-			t_size deltaread_size = pfc::downcast_guarded<t_size>
-				(pfc::min_t(samples_to_length(deltaread), m_maxseeksize - m_filepos));
-			t_size deltaread_done = 
-				raw.read(m_buffer.get_ptr(), deltaread_size, p_abort);
-			m_filepos += deltaread_done;
-		
-			if(needloop && m_filepos >= m_maxseeksize) {
-				//t_filesize remain = samples_to_length(deltaread) - deltaread_done;
-				//m_filepos = m_headlen + remain;
-				m_filepos = m_headlen;
-				raw.raw_seek(m_offset + m_headlen, p_abort);
-				//deltaread_done += raw.read(m_buffer.get_ptr()
-				//	+ deltaread_done, remain, p_abort);
-				if(!loopforever) current_loop++;
-			}
-
-			p_chunk.set_data_fixedpoint(m_buffer.get_ptr(), deltaread_done,
-				samplerate, channels, bits,
-				audio_chunk::g_guess_channel_config(channels));
-
-			// return false时 最后一块不播放
-			//if(!needloop && m_filepos >= m_maxseeksize) {
-			//	return false;
-			//}
-			return true;
+			return raw.run_wav(p_chunk, p_abort);
 		} else {
 			return raw.run(p_chunk, p_abort);
 		}
@@ -481,14 +579,9 @@ public:
 
 	void decode_seek(double p_seconds, abort_callback &p_abort) {
 		if(isWave) {
-			t_uint64 samples = audio_math::time_to_samples(p_seconds, samplerate);
-			m_filepos = samples * samplewidth;
-			m_maxseeksize = m_headlen + m_looplen;
-			if(m_filepos > m_maxseeksize)
-				m_filepos = m_maxseeksize;
-			raw.raw_seek(m_offset + m_filepos, p_abort);
+			raw.seek_wav(p_seconds, p_abort);
 		} else {
-			raw.seek(p_seconds);
+			raw.seek(p_seconds, p_abort);
 		}
 	}
 
