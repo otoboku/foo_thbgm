@@ -165,7 +165,7 @@ public:
 
 	bool run(audio_chunk &p_chunk, abort_callback &p_abort) {
 		if(first_packet) {
-			decoder->initialize(0, 4, p_abort);
+			decoder->initialize(0, input_flag_playback, p_abort);
 			double time_offset = audio_math::samples_to_time(m_offset, samplerate);
 			decoder->seek(seek_seconds + time_offset, p_abort);
 			first_packet = false;
@@ -175,6 +175,7 @@ public:
 		if(!needloop) {
 			return result;
 		} else {
+			if(current_sample > m_totallen) return false; //Decoding failure at xxx (bad allocation)
 			t_size read_count = p_chunk.get_sample_count();
 			current_sample += read_count;
 			if(current_sample >= m_totallen || !result) {
@@ -288,10 +289,15 @@ protected:
 			real_path = basepath;
 		}
 		real_path.append(bgm_path);
-		input_raw* raw_temp = new service_impl_t<input_raw>();
-		raw_temp->open(real_path.c_str(), input_open_decode, isWave, p_abort);
-		raw_temp->get_info(p_info, p_abort);
-		delete raw_temp;
+
+		file::ptr m_file;
+		input_info_reader::ptr reader;
+		//input_raw* raw_temp = new service_impl_t<input_raw_reader>();
+		//raw_temp->open(real_path.c_str(), input_open_info_read, 0, p_abort);
+		//raw_temp->get_info(p_info, p_abort);
+		//delete raw_temp;
+		input_entry::g_open_for_info_read(reader, m_file, real_path.c_str(), p_abort);
+		reader->get_info(0, p_info, p_abort);
 	}
 
 public:
@@ -358,7 +364,6 @@ public:
 		pfc::string8 totaltracks;
 
 		t_uint32 samplerate;
-		string pack;
 		t_filesize m_offset;
 		t_filesize m_headlen;
 		t_filesize m_looplen;
@@ -385,7 +390,7 @@ public:
 
 		totaltracks = pfc::format_int(bgmlist.size() - 1);
 
-		// 首先调用，解决 播放时 批量reload info出错
+		// 首先调用，解决 播放时 批量reload info出错，貌似不是这个问题...
 		if(!isWave && read_thbgm_info) {
 			get_raw_info(p_subsong, p_info, p_abort);
 			//input_raw *raw_temp = open_raw_temp(p_subsong, p_abort);
@@ -399,14 +404,15 @@ public:
 			p_info.info_set_int("bitspersample", bits);
 			p_info.info_set("encoding", encoding);
 			p_info.info_set("codec", codec);
-			if(isWave) {
-				p_info.info_set_bitrate((bits * channels * samplerate + 500) / 1000);
-				p_info.set_length(audio_math::samples_to_time(
-					length_to_samples(m_headlen + m_looplen), samplerate));
-			} else {
-				p_info.set_length(audio_math::samples_to_time(
-					m_headlen + m_looplen, samplerate));
-			}
+		}
+
+		if(isWave) {
+			p_info.info_set_bitrate((bits * channels * samplerate + 500) / 1000);
+			p_info.set_length(audio_math::samples_to_time(
+				length_to_samples(m_headlen + m_looplen), samplerate));
+		} else {
+			p_info.set_length(audio_math::samples_to_time(
+				m_headlen + m_looplen, samplerate));
 		}
 
 		p_info.meta_set("ALBUM", bgmlist[0]["album"].c_str());
@@ -492,7 +498,8 @@ public:
 //	bool decode_get_dynamic_info(file_info &p_info,
 //			double &p_timestamp_delta) {return false;}
 	bool decode_get_dynamic_info(file_info &p_out, double &p_timestamp_delta) {
-		if(!isWave && read_thbgm_info) {
+		//if(!isWave && read_thbgm_info) {
+		if(!isWave) {
 			return raw.get_dynamic_info(p_out,p_timestamp_delta);
 		}
 		else
@@ -500,7 +507,7 @@ public:
 	}
 
 	bool decode_get_dynamic_info_track(file_info &p_out, double &p_timestamp_delta) {
-		if(!isWave && read_thbgm_info) {
+		if(!isWave) {
 			return raw.get_dynamic_info_track(p_out,p_timestamp_delta);
 		}
 		else
@@ -521,7 +528,7 @@ public:
 static mainmenu_commands_factory_t<mainmenu_loopsetting> loopsetting_factory;
 static input_factory_t<input_thxml> g_input_thbgm_factory;
 DECLARE_FILE_TYPE("Touhou-like BGM XML-Tag File", "*.thxml");
-DECLARE_COMPONENT_VERSION("ThBGM Player", "1.1.120522.17.moe", 
+DECLARE_COMPONENT_VERSION("ThBGM Player", "1.1.120522.22.moe", 
 "Play BGM files of Touhou and some related doujin games.\n\n"
 "If you have any feature request and bug report,\n"
 "feel free to contact me at my E-mail address below.\n\n"
