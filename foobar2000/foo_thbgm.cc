@@ -24,8 +24,29 @@ t_filesize m_offset;
 t_filesize m_headlen;
 t_filesize m_looplen;
 t_filesize m_totallen;
-t_filesize current_sample;
+//t_filesize current_sample;
 t_uint32 current_loop;
+
+struct thbgm_entry {
+	t_filesize m_offset;
+	t_filesize m_headlen;
+	t_filesize m_looplen;
+	t_filesize m_totallen;
+	t_filesize m_loopstart;
+	t_filesize m_looplength;
+
+	pfc::string8 title;
+	pfc::string8 artist;
+	t_uint32 bits;
+	t_uint32 channels;
+	t_uint32 samplewidth;
+	pfc::string8 encoding;
+	pfc::string8 codec;
+	
+	bool isWave;
+};
+
+typedef pfc::list_t<thbgm_entry, pfc::alloc_fast> thbgm_entry_list;
 
 class mainmenu_loopsetting : public mainmenu_commands {
 public:
@@ -118,11 +139,17 @@ public:
 	}
 };
 
+void truncate_chunk(audio_chunk & p_chunk, t_size p_samples) {
+	p_chunk.set_sample_count(p_samples);
+	p_chunk.set_data_size(p_samples * p_chunk.get_channel_count());
+}
+
 class input_raw {
 private:
 	file::ptr m_file;
 	input_decoder::ptr decoder;
 	bool first_packet;
+	t_filesize current_sample;
 public:
 	void open(const char *p_path, t_input_open_reason p_reason,
 						bool isWave, abort_callback &p_abort) {
@@ -163,13 +190,39 @@ public:
 			current_sample += read_count;
 			if(current_sample >= m_totallen || !result) {
 				double looptime = audio_math::samples_to_time(m_headlen, samplerate);
-				seek(looptime);
+				truncate_chunk(p_chunk, read_count  - (current_sample - m_totallen));
+				current_sample = m_headlen;
+				decoder->seek(audio_math::samples_to_time(m_offset + m_headlen, samplerate), p_abort);
+				//seek(looptime);
 				if(!loopforever) current_loop++;
-				return run(p_chunk, p_abort);
+				//return run(p_chunk, p_abort);
 			}
 			return result;
 		}
 	}
+/*		bool result = decoder->run(p_chunk, p_abort);
+		t_size read_count = p_chunk.get_sample_count();
+		current_sample += read_count;
+		if(!needloop) {
+			if(current_sample >= m_totallen || !result) {
+				truncate_chunk(p_chunk, read_count  - (current_sample - m_totallen));
+				seek(audio_math::samples_to_time(m_totallen, samplerate));
+				return false;
+			}
+			return result;
+		} else {
+			if(current_sample >= m_totallen || !result) {
+				double looptime = audio_math::samples_to_time(m_headlen, samplerate);
+				truncate_chunk(p_chunk, read_count  - (current_sample - m_totallen));
+				//current_sample = m_headlen;
+				//decoder->seek(audio_math::samples_to_time(m_offset + m_headlen, samplerate), p_abort);
+				seek(looptime);
+				if(!loopforever) current_loop++;
+				//return run(p_chunk, p_abort);
+			}
+			return result;
+		}
+	}*/
 
 	void seek(double seconds) {
 		current_sample = audio_math::time_to_samples(seconds, samplerate);
@@ -198,6 +251,8 @@ protected:
 	bool isArchive;
 	input_raw raw;
 	pfc::array_t<t_uint8> m_buffer;
+
+	thbgm_entry_list m_list;
 
 	inline t_uint64 length_to_samples(t_filesize p_length) {
 		return p_length / samplewidth;
@@ -247,6 +302,8 @@ public:
 		bgmlist = parser.thbgm;
 		pack = bgmlist[0]["pack"];
 		isArchive = pack != "";
+
+		m_list.remove_all();
 	}
 
 	t_uint32 get_subsong_count() {
@@ -274,6 +331,30 @@ public:
 		bits = atoi(bgmlist[p_subsong]["bits"].c_str());
 		channels = atoi(bgmlist[p_subsong]["channels"].c_str());
 		samplewidth = bits * channels / 8;
+
+		thbgm_entry ent;
+		ent.m_offset = m_offset;
+		ent.m_headlen = m_headlen;
+		ent.m_looplen = m_looplen;
+		ent.m_totallen = m_totallen;
+		ent.samplewidth = samplewidth;
+		ent.title = title;
+		ent.artist = artist;
+		ent.bits = bits;
+		ent.channels = channels;
+		ent.samplewidth = samplewidth;
+		ent.encoding = encoding;
+		ent.codec = codec;
+		ent.isWave = isWave;
+		if(isWave) {
+			ent.m_loopstart = m_headlen / samplewidth;
+			ent.m_looplength = m_looplen / samplewidth;
+		} else {
+			ent.m_loopstart = m_headlen;
+			ent.m_looplength = m_looplen;	
+		}
+		m_list.add_item(ent);
+
 		return p_subsong;
 	}
 
@@ -297,14 +378,25 @@ public:
 			}
 		}
 
-		p_info.meta_set("album", bgmlist[0]["album"].c_str());
-		p_info.meta_set("album artist", bgmlist[0]["albumartist"].c_str());
-		p_info.meta_set("title", title);
-		p_info.meta_set("artist", artist);
-		p_info.meta_set("tracknumber", pfc::format_int(p_subsong));
-		p_info.meta_set("totaltracks", totaltracks);
+		p_info.meta_set("ALBUM", bgmlist[0]["album"].c_str());
+		p_info.meta_set("ALBUM ARTIST", bgmlist[0]["albumartist"].c_str());
+		p_info.meta_set("TITLE", m_list[p_subsong-1].title);
+		p_info.meta_set("ARTIST", m_list[p_subsong-1].artist);
+		p_info.meta_set("TRACKNUMBER", pfc::format_int(p_subsong));
+		p_info.meta_set("TOTALTRACKS", totaltracks);
+		p_info.meta_set("LOOPSTART", pfc::format_int(m_list[p_subsong-1].m_loopstart));
+		p_info.meta_set("LOOPLENGTH", pfc::format_int(m_list[p_subsong-1].m_looplength));
 	}
 
+/*		if(isWave) {
+			p_info.meta_set("LOOPSTART", pfc::format_int(m_headlen/samplewidth));
+			p_info.meta_set("LOOPLENGTH", pfc::format_int(m_looplen/samplewidth));	
+		} else {
+			p_info.meta_set("LOOPSTART", pfc::format_int(m_headlen));
+			p_info.meta_set("LOOPLENGTH", pfc::format_int(m_looplen));	
+		}
+	}
+*/
 	t_filestats get_file_stats(abort_callback & p_abort) {
 		return m_file->get_stats(p_abort);
 	}
@@ -329,17 +421,22 @@ public:
 			m_filepos += deltaread_done;
 		
 			if(needloop && m_filepos >= m_maxseeksize) {
-				t_filesize remain = samples_to_length(deltaread) - deltaread_done;
-				m_filepos = m_headlen + remain;
+				//t_filesize remain = samples_to_length(deltaread) - deltaread_done;
+				//m_filepos = m_headlen + remain;
+				m_filepos = m_headlen;
 				raw.raw_seek(m_offset + m_headlen, p_abort);
-				deltaread_done += raw.read(m_buffer.get_ptr()
-					+ deltaread_done, remain, p_abort);
+				//deltaread_done += raw.read(m_buffer.get_ptr()
+				//	+ deltaread_done, remain, p_abort);
 				if(!loopforever) current_loop++;
 			}
 
 			p_chunk.set_data_fixedpoint(m_buffer.get_ptr(), deltaread_done,
 				samplerate, channels, bits,
 				audio_chunk::g_guess_channel_config(channels));
+
+			if(!needloop && m_filepos >= m_maxseeksize) {
+				return false;
+			}
 			return true;
 		} else {
 			return raw.run(p_chunk, p_abort);
