@@ -247,7 +247,7 @@ protected:
 		raw.open(real_path.c_str(), input_open_decode, isWave, p_abort);
 	}
 
-	// get_info 用，使用open_raw 会因为current_sample定义在类内无法播放
+/*	// get_info 用，使用open_raw 会因为current_sample定义在类内无法播放
 	input_raw* open_raw_temp(t_uint32 p_subsong, abort_callback &p_abort) {
 		string bgm_path = bgmlist[p_subsong]["file"];
 		string real_path;
@@ -269,7 +269,7 @@ protected:
 		raw_temp->open(real_path.c_str(), input_open_decode, isWave, p_abort);
 		return raw_temp;
 	}
-
+*/
 	// get_info 用，使用open_raw 会因为current_sample定义在类内无法播放
 	void get_raw_info(t_uint32 p_subsong, file_info &p_info, abort_callback &p_abort) {
 		string bgm_path = bgmlist[p_subsong]["file"];
@@ -385,23 +385,27 @@ public:
 
 		totaltracks = pfc::format_int(bgmlist.size() - 1);
 
-		p_info.info_set_int("samplerate", samplerate);
-		p_info.info_set_int("channels", channels);
-		p_info.info_set_int("bitspersample", bits);
-		p_info.info_set("encoding", encoding);
-		p_info.info_set("codec", codec);
-		if(isWave) {
-			p_info.info_set_bitrate((bits * channels * samplerate + 500) / 1000);
-			p_info.set_length(audio_math::samples_to_time(
-				length_to_samples(m_headlen + m_looplen), samplerate));
-		} else {
-			p_info.set_length(audio_math::samples_to_time(
-				m_headlen + m_looplen, samplerate));
-			if(read_thbgm_info) {
-				get_raw_info(p_subsong, p_info, p_abort);
-				//input_raw *raw_temp = open_raw_temp(p_subsong, p_abort);
-				//raw_temp->get_info(p_info, p_abort);
-				//delete raw_temp;
+		// 首先调用，解决 播放时 批量reload info出错
+		if(!isWave && read_thbgm_info) {
+			get_raw_info(p_subsong, p_info, p_abort);
+			//input_raw *raw_temp = open_raw_temp(p_subsong, p_abort);
+			//raw_temp->get_info(p_info, p_abort);
+			//delete raw_temp;
+		}
+		else
+		{
+			p_info.info_set_int("samplerate", samplerate);
+			p_info.info_set_int("channels", channels);
+			p_info.info_set_int("bitspersample", bits);
+			p_info.info_set("encoding", encoding);
+			p_info.info_set("codec", codec);
+			if(isWave) {
+				p_info.info_set_bitrate((bits * channels * samplerate + 500) / 1000);
+				p_info.set_length(audio_math::samples_to_time(
+					length_to_samples(m_headlen + m_looplen), samplerate));
+			} else {
+				p_info.set_length(audio_math::samples_to_time(
+					m_headlen + m_looplen, samplerate));
 			}
 		}
 
@@ -517,7 +521,7 @@ public:
 static mainmenu_commands_factory_t<mainmenu_loopsetting> loopsetting_factory;
 static input_factory_t<input_thxml> g_input_thbgm_factory;
 DECLARE_FILE_TYPE("Touhou-like BGM XML-Tag File", "*.thxml");
-DECLARE_COMPONENT_VERSION("ThBGM Player", "1.1.120522.16.moe", 
+DECLARE_COMPONENT_VERSION("ThBGM Player", "1.1.120522.17.moe", 
 "Play BGM files of Touhou and some related doujin games.\n\n"
 "If you have any feature request and bug report,\n"
 "feel free to contact me at my E-mail address below.\n\n"
