@@ -20,15 +20,7 @@ PFC_DECLARE_EXCEPTION(exception_loop_out_of_range,pfc::exception,"error:loop out
 
 const t_uint32 deltaread = 1024;
 //double seek_seconds;
-t_uint32 samplerate;
-string pack;
-t_filesize m_offset;
-t_filesize m_headlen;
-t_filesize m_looplen;
-t_filesize m_totallen;
 //t_filesize current_sample;
-t_uint32 current_loop;
-
 
 class mainmenu_loopsetting : public mainmenu_commands {
 public:
@@ -121,9 +113,17 @@ public:
 	}
 };
 
-void truncate_chunk(audio_chunk & p_chunk, t_size p_samples) {
+inline void truncate_chunk(audio_chunk & p_chunk, t_size p_samples) {
 	p_chunk.set_sample_count(p_samples);
 	p_chunk.set_data_size(p_samples * p_chunk.get_channel_count());
+}
+
+inline t_uint64 length_to_samples(t_filesize p_length, t_uint32 p_samplewidth) {
+	return p_length / p_samplewidth;
+}
+
+inline t_filesize samples_to_length(t_uint64 p_samples, t_uint32 p_samplewidth) {
+	return p_samples * p_samplewidth;
 }
 
 class input_raw {
@@ -134,7 +134,24 @@ private:
 	t_filesize current_sample;
 	t_filesize read_count;
 	double seek_seconds;
+	t_uint32 current_loop;
 public:
+	bool isWave;
+
+	t_uint32 bits;
+	t_uint32 channels;
+	t_uint32 samplewidth;
+
+	t_uint32 samplerate;
+	t_filesize m_offset;
+	t_filesize m_headlen;
+	t_filesize m_looplen;
+	t_filesize m_totallen;
+
+	t_filesize m_filepos;
+	t_filesize m_maxseeksize;
+	pfc::array_t<t_uint8> m_buffer;
+
 	void open(const char *p_path, t_input_open_reason p_reason,
 						bool isWave, abort_callback &p_abort) {
 		m_file.release();
@@ -144,6 +161,15 @@ public:
 			decoder.release();
 			input_entry::g_open_for_decoding(decoder, m_file, p_path, p_abort);
 		}
+	}
+
+	void init(abort_callback &p_abort)
+	{
+		if(isWave) {
+			m_buffer.set_size(samples_to_length(deltaread, samplewidth));
+		}
+		//decoder->initialize(0, input_flag_playback, p_abort);
+		current_loop = 1;
 	}
 
 	t_size read(void *buffer, t_size size, abort_callback &p_abort) {
@@ -159,11 +185,19 @@ public:
 	}
 
 	bool get_dynamic_info(file_info & p_out, double & p_timestamp_delta) {
-		return decoder->get_dynamic_info(p_out,p_timestamp_delta);
+		if(!isWave) {
+			return decoder->get_dynamic_info(p_out,p_timestamp_delta);
+		}
+		else
+			return false;
 	}
 
 	bool get_dynamic_info_track(file_info & p_out, double & p_timestamp_delta) {
-		return decoder->get_dynamic_info_track(p_out,p_timestamp_delta);
+		if(!isWave) {
+			return decoder->get_dynamic_info_track(p_out,p_timestamp_delta);
+		}
+		else
+			return false;
 	}
 
 	bool run(audio_chunk &p_chunk, abort_callback &p_abort) {
@@ -202,6 +236,52 @@ public:
 		seek_seconds = seconds;
 		first_packet = true;
 	}
+
+	bool decode_run(audio_chunk &p_chunk, abort_callback &p_abort) {
+		if(isWave) {
+			if(m_filepos >= m_maxseeksize) return false; 
+			t_size deltaread_size = pfc::downcast_guarded<t_size>
+				(pfc::min_t(samples_to_length(deltaread, samplewidth), m_maxseeksize - m_filepos));
+			t_size deltaread_done = 
+				read(m_buffer.get_ptr(), deltaread_size, p_abort);
+			m_filepos += deltaread_done;
+		
+			if(needloop && m_filepos >= m_maxseeksize) {
+				//t_filesize remain = samples_to_length(deltaread) - deltaread_done;
+				//m_filepos = m_headlen + remain;
+				m_filepos = m_headlen;
+				raw_seek(m_offset + m_headlen, p_abort);
+				//deltaread_done += raw.read(m_buffer.get_ptr()
+				//	+ deltaread_done, remain, p_abort);
+				if(!loopforever) current_loop++;
+			}
+
+			p_chunk.set_data_fixedpoint(m_buffer.get_ptr(), deltaread_done,
+				samplerate, channels, bits,
+				audio_chunk::g_guess_channel_config(channels));
+
+			// return false时 最后一块不播放
+			//if(!needloop && m_filepos >= m_maxseeksize) {
+			//	return false;
+			//}
+			return true;
+		} else {
+			return run(p_chunk, p_abort);
+		}
+	}
+
+	void decode_seek(double p_seconds, abort_callback &p_abort) {
+		if(isWave) {
+			t_uint64 samples = audio_math::time_to_samples(p_seconds, samplerate);
+			m_filepos = samples * samplewidth;
+			m_maxseeksize = m_headlen + m_looplen;
+			if(m_filepos > m_maxseeksize)
+				m_filepos = m_maxseeksize;
+			raw_seek(m_offset + m_filepos, p_abort);
+		} else {
+			seek(p_seconds);
+		}
+	}
 };
 
 class input_thxml {
@@ -211,6 +291,8 @@ protected:
 	vector<map<string, string> > bgmlist;
 	pfc::string8 title;
 	pfc::string8 artist;
+	string pack;
+
 	t_uint32 bits;
 	t_uint32 channels;
 	t_uint32 samplewidth;
@@ -222,16 +304,14 @@ protected:
 	
 	bool isWave;
 	bool isArchive;
+
+	t_filesize m_offset;
+	t_filesize m_headlen;
+	t_filesize m_looplen;
+	t_filesize m_totallen;
+	t_uint32 samplerate;
+
 	input_raw raw;
-	pfc::array_t<t_uint8> m_buffer;
-
-	inline t_uint64 length_to_samples(t_filesize p_length, t_uint32 p_samplewidth) {
-		return p_length / p_samplewidth;
-	}
-
-	inline t_filesize samples_to_length(t_uint64 p_samples, t_uint32 p_samplewidth) {
-		return p_samples * p_samplewidth;
-	}
 
 	void open_raw(t_uint32 p_subsong, abort_callback &p_abort) {
 		string bgm_path = bgmlist[p_subsong]["file"];
@@ -251,6 +331,20 @@ protected:
 		}
 		real_path.append(bgm_path);
 		raw = service_impl_t<input_raw>();
+
+		raw.isWave = isWave;
+
+		raw.bits = bits;
+		raw.channels = channels;
+		raw.samplewidth = samplewidth;
+
+		raw.samplerate = samplerate;
+		raw.m_offset = m_offset;
+		raw.m_headlen = m_headlen;
+		raw.m_looplen = m_looplen;
+		raw.m_totallen = m_totallen;
+		raw.init(p_abort);
+
 		raw.open(real_path.c_str(), input_open_decode, isWave, p_abort);
 	}
 
@@ -426,10 +520,10 @@ public:
 	void decode_initialize(t_uint32 p_subsong, unsigned p_flags,
 												abort_callback &p_abort) {
 		isWave = bgmlist[p_subsong]["codec"] == "PCM" && !isArchive;
-		codec = bgmlist[p_subsong]["codec"].c_str();
-		encoding = bgmlist[p_subsong]["encoding"].c_str();
-		title = bgmlist[p_subsong]["title"].c_str();
-		artist = bgmlist[p_subsong]["artist"].c_str();
+		//codec = bgmlist[p_subsong]["codec"].c_str();
+		//encoding = bgmlist[p_subsong]["encoding"].c_str();
+		//title = bgmlist[p_subsong]["title"].c_str();
+		//artist = bgmlist[p_subsong]["artist"].c_str();
 
 		string pos = bgmlist[p_subsong]["pos"];
 		size_t pos_head = pos.find(',');
@@ -445,57 +539,15 @@ public:
 		samplewidth = bits * channels / 8;
 
 		open_raw(get_subsong(--p_subsong), p_abort);
-		if(isWave) {
-			m_buffer.set_size(samples_to_length(deltaread, samplewidth));
-		}
-		current_loop = 1;
 		decode_seek(0, p_abort);
 	}
 
 	bool decode_run(audio_chunk &p_chunk, abort_callback &p_abort) {
-		if(isWave) {
-			if(m_filepos >= m_maxseeksize) return false; 
-			t_size deltaread_size = pfc::downcast_guarded<t_size>
-				(pfc::min_t(samples_to_length(deltaread, samplewidth), m_maxseeksize - m_filepos));
-			t_size deltaread_done = 
-				raw.read(m_buffer.get_ptr(), deltaread_size, p_abort);
-			m_filepos += deltaread_done;
-		
-			if(needloop && m_filepos >= m_maxseeksize) {
-				//t_filesize remain = samples_to_length(deltaread) - deltaread_done;
-				//m_filepos = m_headlen + remain;
-				m_filepos = m_headlen;
-				raw.raw_seek(m_offset + m_headlen, p_abort);
-				//deltaread_done += raw.read(m_buffer.get_ptr()
-				//	+ deltaread_done, remain, p_abort);
-				if(!loopforever) current_loop++;
-			}
-
-			p_chunk.set_data_fixedpoint(m_buffer.get_ptr(), deltaread_done,
-				samplerate, channels, bits,
-				audio_chunk::g_guess_channel_config(channels));
-
-			// return false时 最后一块不播放
-			//if(!needloop && m_filepos >= m_maxseeksize) {
-			//	return false;
-			//}
-			return true;
-		} else {
-			return raw.run(p_chunk, p_abort);
-		}
+			return raw.decode_run(p_chunk, p_abort);
 	}
 
 	void decode_seek(double p_seconds, abort_callback &p_abort) {
-		if(isWave) {
-			t_uint64 samples = audio_math::time_to_samples(p_seconds, samplerate);
-			m_filepos = samples * samplewidth;
-			m_maxseeksize = m_headlen + m_looplen;
-			if(m_filepos > m_maxseeksize)
-				m_filepos = m_maxseeksize;
-			raw.raw_seek(m_offset + m_filepos, p_abort);
-		} else {
-			raw.seek(p_seconds);
-		}
+			raw.decode_seek(p_seconds, p_abort);
 	}
 
 	bool decode_can_seek() {return true;}
@@ -505,19 +557,11 @@ public:
 //			double &p_timestamp_delta) {return false;}
 	bool decode_get_dynamic_info(file_info &p_out, double &p_timestamp_delta) {
 		//if(!isWave && read_thbgm_info) {
-		if(!isWave) {
 			return raw.get_dynamic_info(p_out,p_timestamp_delta);
-		}
-		else
-			return false;
 	}
 
 	bool decode_get_dynamic_info_track(file_info &p_out, double &p_timestamp_delta) {
-		if(!isWave) {
 			return raw.get_dynamic_info_track(p_out,p_timestamp_delta);
-		}
-		else
-			return false;
 	}
 
 	void decode_on_idle(abort_callback &p_abort) {}
@@ -534,7 +578,7 @@ public:
 static mainmenu_commands_factory_t<mainmenu_loopsetting> loopsetting_factory;
 static input_factory_t<input_thxml> g_input_thbgm_factory;
 DECLARE_FILE_TYPE("Touhou-like BGM XML-Tag File", "*.thxml");
-DECLARE_COMPONENT_VERSION("ThBGM Player", "1.1.120522.22.moe", 
+DECLARE_COMPONENT_VERSION("ThBGM Player", "1.1.120527.18.moe", 
 "Play BGM files of Touhou and some related doujin games.\n\n"
 "If you have any feature request and bug report,\n"
 "feel free to contact me at my E-mail address below.\n\n"
