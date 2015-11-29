@@ -17,7 +17,7 @@ static cfg_uint loopcount(cfg_loop_count, 1);
 static cfg_bool read_thbgm_info(cfg_thbgm_readinfo, false);
 
 const t_uint32 deltaread = 1024;
-double seek_seconds;
+//double seek_seconds;
 t_uint32 samplerate;
 string pack;
 t_filesize m_offset;
@@ -150,6 +150,7 @@ private:
 	input_decoder::ptr decoder;
 	bool first_packet;
 	t_filesize current_sample;
+	double seek_seconds;
 public:
 	void open(const char *p_path, t_input_open_reason p_reason,
 						bool isWave, abort_callback &p_abort) {
@@ -291,6 +292,29 @@ protected:
 		raw.open(real_path.c_str(), input_open_decode, isWave, p_abort);
 	}
 
+	// get_info 用，使用open_raw 会因为current_sample定义在类内无法播放
+	input_raw* open_raw_temp(t_uint32 p_subsong, abort_callback &p_abort) {
+		string bgm_path = bgmlist[p_subsong]["file"];
+		string real_path;
+		if(isArchive) {
+			t_uint32 fl = basepath.length() + bgm_path.find_first_of('|');
+			char flstr[4];
+			_itoa_s(fl, flstr, 10);
+			real_path = "unpack://";
+			real_path.append(pack);
+			real_path.append("|");
+			real_path.append(flstr);
+			real_path.append("|");
+			real_path.append(basepath);
+		} else {
+			real_path = basepath;
+		}
+		real_path.append(bgm_path);
+		input_raw* raw_temp = new service_impl_t<input_raw>();
+		raw_temp->open(real_path.c_str(), input_open_decode, isWave, p_abort);
+		return raw_temp;
+	}
+
 public:
 	void open(file::ptr p_filehint, const char *p_path,
 						t_input_open_reason p_reason, abort_callback &p_abort) {
@@ -381,8 +405,9 @@ public:
 			p_info.set_length(audio_math::samples_to_time(
 				m_headlen + m_looplen, samplerate));
 			if(read_thbgm_info) {
-				open_raw(p_subsong, p_abort);
-				raw.get_info(p_info, p_abort);
+				input_raw *raw_temp = open_raw_temp(p_subsong, p_abort);
+				raw_temp->get_info(p_info, p_abort);
+				delete raw_temp;
 			}
 
 		}
@@ -443,9 +468,10 @@ public:
 				samplerate, channels, bits,
 				audio_chunk::g_guess_channel_config(channels));
 
-			if(!needloop && m_filepos >= m_maxseeksize) {
-				return false;
-			}
+			// return false时 最后一块不播放
+			//if(!needloop && m_filepos >= m_maxseeksize) {
+			//	return false;
+			//}
 			return true;
 		} else {
 			return raw.run(p_chunk, p_abort);
@@ -500,7 +526,7 @@ public:
 static mainmenu_commands_factory_t<mainmenu_loopsetting> loopsetting_factory;
 static input_factory_t<input_thxml> g_input_thbgm_factory;
 DECLARE_FILE_TYPE("Touhou-like BGM XML-Tag File", "*.thxml");
-DECLARE_COMPONENT_VERSION("ThBGM Player", "1.1", 
+DECLARE_COMPONENT_VERSION("ThBGM Player", "1.1.0522", 
 "Play BGM files of Touhou and some related doujin games.\n\n"
 "If you have any feature request and bug report,\n"
 "feel free to contact me at my E-mail address below.\n\n"
